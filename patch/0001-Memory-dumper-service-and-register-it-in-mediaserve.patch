@@ -1,0 +1,629 @@
+From ba736ab8cfcc490b7b7eb65ef5a91fd7e7335c57 Mon Sep 17 00:00:00 2001
+From: Freepine <freepine@gmail.com>
+Date: Wed, 3 Feb 2010 15:54:07 +0800
+Subject: [PATCH] Memory dumper service, and register it in mediaserver process.
+
+---
+ cmds/servicemanager/service_manager.c  |    1 +
+ media/mediaserver/Android.mk           |    2 +
+ media/mediaserver/main_mediaserver.cpp |    2 +
+ memorydumper/Android.mk                |   30 ++++
+ memorydumper/IMemoryDumper.cpp         |   79 ++++++++++
+ memorydumper/IMemoryDumper.h           |   49 ++++++
+ memorydumper/MemoryDumper.cpp          |  255 ++++++++++++++++++++++++++++++++
+ memorydumper/MemoryDumper.h            |   44 ++++++
+ memorydumper/memorydumper.cpp          |   58 +++++++
+ 9 files changed, 520 insertions(+), 0 deletions(-)
+ create mode 100644 memorydumper/Android.mk
+ create mode 100644 memorydumper/IMemoryDumper.cpp
+ create mode 100644 memorydumper/IMemoryDumper.h
+ create mode 100644 memorydumper/MemoryDumper.cpp
+ create mode 100644 memorydumper/MemoryDumper.h
+ create mode 100644 memorydumper/memorydumper.cpp
+
+diff --git a/cmds/servicemanager/service_manager.c b/cmds/servicemanager/service_manager.c
+index f3a4713..2d33032 100644
+--- a/cmds/servicemanager/service_manager.c
++++ b/cmds/servicemanager/service_manager.c
+@@ -30,6 +30,7 @@ static struct {
+     { AID_MEDIA, "media.audio_flinger" },
+     { AID_MEDIA, "media.player" },
+     { AID_MEDIA, "media.camera" },
++    { AID_MEDIA, "memory.dumper" },
+     { AID_MEDIA, "media.audio_policy" },
+     { AID_RADIO, "radio.phone" },
+     { AID_RADIO, "radio.sms" },
+diff --git a/media/mediaserver/Android.mk b/media/mediaserver/Android.mk
+index a92cea8..adf6581 100644
+--- a/media/mediaserver/Android.mk
++++ b/media/mediaserver/Android.mk
+@@ -8,6 +8,7 @@ LOCAL_SHARED_LIBRARIES := \
+ 	libaudioflinger \
+ 	libcameraservice \
+ 	libmediaplayerservice \
++        libmemorydumper \
+ 	libutils \
+ 	libbinder
+ 
+@@ -16,6 +17,7 @@ base := $(LOCAL_PATH)/../..
+ LOCAL_C_INCLUDES := \
+     $(base)/libs/audioflinger \
+     $(base)/camera/libcameraservice \
++    $(base)/memorydumper \
+     $(base)/media/libmediaplayerservice
+ 
+ LOCAL_MODULE:= mediaserver
+diff --git a/media/mediaserver/main_mediaserver.cpp b/media/mediaserver/main_mediaserver.cpp
+index 7094cfa..c5735ac 100644
+--- a/media/mediaserver/main_mediaserver.cpp
++++ b/media/mediaserver/main_mediaserver.cpp
+@@ -28,6 +28,7 @@
+ #include <AudioFlinger.h>
+ #include <CameraService.h>
+ #include <MediaPlayerService.h>
++#include <MemoryDumper.h>
+ #include <AudioPolicyService.h>
+ #include <private/android_filesystem_config.h>
+ 
+@@ -40,6 +41,7 @@ int main(int argc, char** argv)
+     LOGI("ServiceManager: %p", sm.get());
+     AudioFlinger::instantiate();
+     MediaPlayerService::instantiate();
++    MemoryDumper::instantiate();
+     CameraService::instantiate();
+     AudioPolicyService::instantiate();
+     ProcessState::self()->startThreadPool();
+diff --git a/memorydumper/Android.mk b/memorydumper/Android.mk
+new file mode 100644
+index 0000000..a8f37ff
+--- /dev/null
++++ b/memorydumper/Android.mk
+@@ -0,0 +1,30 @@
++LOCAL_PATH:= $(call my-dir)
++include $(CLEAR_VARS)
++
++LOCAL_SRC_FILES:= \
++    IMemoryDumper.cpp \
++    MemoryDumper.cpp
++
++LOCAL_SHARED_LIBRARIES := \
++	libui libcutils libutils libbinder
++
++LOCAL_MODULE:= libmemorydumper
++
++LOCAL_PRELINK_MODULE := false
++
++include $(BUILD_SHARED_LIBRARY)
++
++include $(CLEAR_VARS)
++
++LOCAL_SRC_FILES:= \
++    memorydumper.cpp
++
++LOCAL_SHARED_LIBRARIES := \
++    libmemorydumper \
++    libc \
++    libcutils \
++    libutils
++
++LOCAL_MODULE:= memorydumper
++
++include $(BUILD_EXECUTABLE)
+diff --git a/memorydumper/IMemoryDumper.cpp b/memorydumper/IMemoryDumper.cpp
+new file mode 100644
+index 0000000..faaee3e
+--- /dev/null
++++ b/memorydumper/IMemoryDumper.cpp
+@@ -0,0 +1,79 @@
++/*
++**
++** Copyright 2010, The Android Open Source Project
++**
++** Licensed under the Apache License, Version 2.0 (the "License");
++** you may not use this file except in compliance with the License.
++** You may obtain a copy of the License at
++**
++**     http://www.apache.org/licenses/LICENSE-2.0
++**
++** Unless required by applicable law or agreed to in writing, software
++** distributed under the License is distributed on an "AS IS" BASIS,
++** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++** See the License for the specific language governing permissions and
++** limitations under the License.
++*/
++
++#include <utils/RefBase.h>
++#include <binder/IInterface.h>
++#include <binder/Parcel.h>
++
++#include "IMemoryDumper.h"
++
++namespace android {
++
++enum {
++    DUMPHEAP = IBinder::FIRST_CALL_TRANSACTION,
++    SAVEMAPS,
++};
++
++class BpMemoryDumper: public BpInterface<IMemoryDumper>
++{
++public:
++    BpMemoryDumper(const sp<IBinder>& impl)
++        : BpInterface<IMemoryDumper>(impl)
++    {
++    }
++
++    virtual bool dumpHeap()
++    {
++        Parcel data, reply;
++        data.writeInterfaceToken(IMemoryDumper::getInterfaceDescriptor());
++        remote()->transact(DUMPHEAP, data, &reply);
++        return (bool)(reply.readInt32());
++    }
++
++    virtual bool saveMaps()
++    {
++        Parcel data, reply;
++        data.writeInterfaceToken(IMemoryDumper::getInterfaceDescriptor());
++        remote()->transact(SAVEMAPS, data, &reply);
++        return (bool)(reply.readInt32());
++    }
++};
++
++IMPLEMENT_META_INTERFACE(MemoryDumper, "android.memory.IMemoryDumper");
++
++// ----------------------------------------------------------------------
++
++status_t BnMemoryDumper::onTransact(
++    uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
++{
++    switch(code) {
++        case DUMPHEAP: {
++            CHECK_INTERFACE(IMemoryDumper, data, reply);
++            reply->writeInt32(dumpHeap());
++            return NO_ERROR;
++        } break;
++        case SAVEMAPS: {
++            CHECK_INTERFACE(IMemoryDumper, data, reply);
++            reply->writeInt32(saveMaps());
++            return NO_ERROR;
++        } break;
++        default:
++            return BBinder::onTransact(code, data, reply, flags);
++    }
++}
++
++}; // namespace android
+diff --git a/memorydumper/IMemoryDumper.h b/memorydumper/IMemoryDumper.h
+new file mode 100644
+index 0000000..c203f39
+--- /dev/null
++++ b/memorydumper/IMemoryDumper.h
+@@ -0,0 +1,49 @@
++/*
++ * Copyright (C) 2010 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef ANDROID_IMEMORYDUMPER_H
++#define ANDROID_IMEMORYDUMPER_H
++
++#include <utils/RefBase.h>
++#include <binder/IInterface.h>
++#include <binder/Parcel.h>
++
++namespace android {
++
++class IMemoryDumper: public IInterface
++{
++public:
++    DECLARE_META_INTERFACE(MemoryDumper);
++
++    virtual bool dumpHeap() = 0;
++    virtual bool saveMaps() = 0;
++};
++
++// ----------------------------------------------------------------------------
++
++class BnMemoryDumper: public BnInterface<IMemoryDumper>
++{
++public:
++    virtual status_t    onTransact( uint32_t code,
++                                    const Parcel& data,
++                                    Parcel* reply,
++                                    uint32_t flags = 0);
++};
++
++}; // namespace android
++
++#endif // ANDROID_IMEMORYDUMPER_H
++
+diff --git a/memorydumper/MemoryDumper.cpp b/memorydumper/MemoryDumper.cpp
+new file mode 100644
+index 0000000..cf6127a
+--- /dev/null
++++ b/memorydumper/MemoryDumper.cpp
+@@ -0,0 +1,255 @@
++/*
++**
++** Copyright 2008, The Android Open Source Project
++**
++** Licensed under the Apache License, Version 2.0 (the "License");
++** you may not use this file except in compliance with the License.
++** You may obtain a copy of the License at
++**
++**     http://www.apache.org/licenses/LICENSE-2.0
++**
++** Unless required by applicable law or agreed to in writing, software
++** distributed under the License is distributed on an "AS IS" BASIS,
++** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++** See the License for the specific language governing permissions and
++** limitations under the License.
++*/
++
++#define LOG_NDEBUG 0
++#define LOG_TAG "MemoryDumper"
++#include <utils/Log.h>
++
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <dirent.h>
++#include <unistd.h>
++
++#include "MemoryDumper.h"
++#include <utils/Errors.h>  // for status_t
++#include <utils/String8.h>
++#include <utils/String16.h>
++#include <utils/SystemClock.h>
++#include <utils/Vector.h>
++#include <cutils/properties.h>
++#include <cutils/atomic.h>
++#include <cutils/properties.h> // for property_get
++
++#include <utils/misc.h>
++#include <binder/IServiceManager.h>
++
++namespace android {
++
++const size_t READ_BLOCK_SIZE = 4096;
++
++void MemoryDumper::instantiate() {
++    LOGV("Instantiate memory dumper service...");
++    const size_t FILENAME_SIZE = 64;
++    char dumpFileName[FILENAME_SIZE];
++    memset(dumpFileName, 0, FILENAME_SIZE);
++    snprintf(dumpFileName, FILENAME_SIZE-1, "/data/memstatus_%d", getpid()); 
++    defaultServiceManager()->addService(
++            String16("memory.dumper"), new MemoryDumper(dumpFileName));
++}
++
++MemoryDumper::MemoryDumper(const char* destFile)
++    :m_fileName(destFile)
++    ,m_dumpNo(0)
++{
++    LOGV("MemoryDumper created, dump file=%s", (const char*)m_fileName);
++}
++
++MemoryDumper::~MemoryDumper()
++{
++    LOGV("MemoryDumper destructor.");
++}
++
++#if defined(__arm__)
++extern "C" void get_malloc_leak_info(uint8_t** info, size_t* overallSize,
++        size_t* infoSize, size_t* totalMemory, size_t* backtraceSize);
++extern "C" void free_malloc_leak_info(uint8_t* info);
++
++//E5568c, this file is copied from MediaPlayerService.cpp: 
++//      void memStatus(int fd, const Vector<String16>& args) 
++//
++bool MemoryDumper::dumpHeap()
++{
++    LOGV("enter dumpHeap");
++    bool isDumpSuccess = false;
++    const size_t FILENAME_SIZE = 1024;
++    char fileName[FILENAME_SIZE];
++    memset(fileName, 0, FILENAME_SIZE);
++    snprintf(fileName, FILENAME_SIZE-1, "%s.%d", (const char*)m_fileName, m_dumpNo);
++    m_dumpNo++;
++    FILE *f = fopen(fileName, "w+");
++    if(f == NULL)
++    {
++        LOGE("Open file failed: %s!", (const char*)m_fileName);
++        return false;
++    }
++    const size_t SIZE = 256;
++    char buffer[SIZE];
++    String8 result;
++
++    typedef struct {
++        size_t size;
++        size_t dups;
++        intptr_t * backtrace;
++    } AllocEntry;
++
++    uint8_t *info = NULL;
++    size_t overallSize = 0;
++    size_t infoSize = 0;
++    size_t totalMemory = 0;
++    size_t backtraceSize = 0;
++
++    get_malloc_leak_info(&info, &overallSize, &infoSize, &totalMemory, &backtraceSize);
++    LOGI("returned from get_malloc_leak_info, info=0x%x, overallSize=%d, infoSize=%d, totalMemory=%d, backtraceSize=%d", (int)info, overallSize, infoSize, totalMemory, backtraceSize);
++    if (info) {
++        uint8_t *ptr = info;
++        size_t count = overallSize / infoSize;
++
++        snprintf(buffer, SIZE, " Allocation count %i\n", count);
++        result.append(buffer);
++        snprintf(buffer, SIZE, " Total meory %i\n", totalMemory);
++        result.append(buffer);
++
++        AllocEntry * entries = new AllocEntry[count];
++
++        for (size_t i = 0; i < count; i++) {
++            // Each entry should be size_t, size_t, intptr_t[backtraceSize]
++            AllocEntry *e = &entries[i];
++
++            e->size = *reinterpret_cast<size_t *>(ptr);
++            ptr += sizeof(size_t);
++
++            e->dups = *reinterpret_cast<size_t *>(ptr);
++            ptr += sizeof(size_t);
++
++            e->backtrace = reinterpret_cast<intptr_t *>(ptr);
++            ptr += sizeof(intptr_t) * backtraceSize;
++        }
++
++        // Now we need to sort the entries.  They come sorted by size but
++        // not by stack trace which causes problems using diff.
++        bool moved;
++        do {
++            moved = false;
++            for (size_t i = 0; i < (count - 1); i++) {
++                AllocEntry *e1 = &entries[i];                AllocEntry *e2 = &entries[i+1];
++
++                bool swap = e1->size < e2->size;
++                if (e1->size == e2->size) {
++                    for(size_t j = 0; j < backtraceSize; j++) {
++                        if (e1->backtrace[j] == e2->backtrace[j]) {
++                            continue;
++                        }
++                        swap = e1->backtrace[j] < e2->backtrace[j];
++                        break;
++                    }
++                }
++                if (swap) {
++                    AllocEntry t = entries[i];
++                    entries[i] = entries[i+1];
++                    entries[i+1] = t;
++                    moved = true;
++                }
++            }
++        } while (moved);
++
++        for (size_t i = 0; i < count; i++) {
++            AllocEntry *e = &entries[i];
++
++            snprintf(buffer, SIZE, "size %8i, dup %4i, ", e->size, e->dups);
++            result.append(buffer);
++            for (size_t ct = 0; (ct < backtraceSize) && e->backtrace[ct]; ct++) {
++                if (ct) {
++                    result.append(", ");
++                }
++                snprintf(buffer, SIZE, "0x%08x", e->backtrace[ct]);
++                result.append(buffer);
++            }
++            result.append("\n");
++        }
++
++        delete[] entries;
++        free_malloc_leak_info(info);
++        isDumpSuccess = true;
++    }
++    if(isDumpSuccess)
++    {
++        write(fileno(f), result.string(), result.size());
++        String8 mapsfile(fileName);
++        mapsfile.append(".maps");
++        LOGV("save maps file to: %s", (const char*)mapsfile);
++        copyfile("/proc/self/maps", (const char*)mapsfile);
++        String8 smapsfile(fileName);
++        smapsfile.append(".smaps");
++        LOGV("save smaps file to: %s", (const char*)smapsfile);
++        copyfile("/proc/self/smaps", (const char*)smapsfile);
++        String8 statmfile(fileName);
++        statmfile.append(".statm");
++        LOGV("save statm file to: %s", (const char*)statmfile);
++        copyfile("/proc/self/statm", (const char*)statmfile);
++    }
++    fclose(f);
++    LOGV("exit memStatus, isDumpSuccess=%d", (int)isDumpSuccess);
++    return isDumpSuccess;
++}
++
++#else
++
++bool MemoryDumper::dumpHeap()
++{
++    LOGV*("MemoryDumper::dumpHeap not supported!.");
++    return false;
++}
++
++#endif
++
++bool MemoryDumper::saveMaps()
++{
++    LOGV("enter saveMaps");
++    String8 mapsfile = m_fileName;
++    mapsfile.append(".maps");
++    return copyfile("/proc/self/maps", (const char*)mapsfile);
++}
++
++bool MemoryDumper::copyfile(const char* sourceFile, const char* destFile)
++{
++    LOGV("copy file, sourceFile=%s, destFile=%s", sourceFile, destFile);
++    FILE* src = fopen(sourceFile, "r");
++    if(src == NULL)
++    {
++        LOGE("Open source file failed: %s!", sourceFile);
++        return false;
++    }
++    FILE* dest = fopen(destFile, "w+");
++    if(dest == NULL)
++    {
++        LOGE("Open dest file failed: %s!", destFile);
++        fclose(src);
++        return false;
++    }
++    char buffer[READ_BLOCK_SIZE];
++    int readNum = 0;
++    while(!feof(src))
++    {
++        readNum = fread(buffer, 1, READ_BLOCK_SIZE, src);
++        if(readNum > 0)
++        {
++            fwrite(buffer, 1, readNum, dest);
++        }
++        else
++        {
++            LOGE("Read error, readNum=%d, errno=%d", readNum, errno);
++            break;
++        }
++    }
++    fclose(src);
++    fclose(dest);
++    LOGV("exit copy file.");
++    return true;
++}
++
++};
++
+diff --git a/memorydumper/MemoryDumper.h b/memorydumper/MemoryDumper.h
+new file mode 100644
+index 0000000..5cf7e5d
+--- /dev/null
++++ b/memorydumper/MemoryDumper.h
+@@ -0,0 +1,44 @@
++/*
++**
++** Copyright 2010, The Android Open Source Project
++**
++** Licensed under the Apache License, Version 2.0 (the "License");
++** you may not use this file except in compliance with the License.
++** You may obtain a copy of the License at
++**
++**     http://www.apache.org/licenses/LICENSE-2.0
++**
++** Unless required by applicable law or agreed to in writing, software
++** distributed under the License is distributed on an "AS IS" BASIS,
++** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++** See the License for the specific language governing permissions and
++** limitations under the License.
++*/
++
++#ifndef ANDROID_MEMORYDUMPER_H
++#define ANDROID_MEMORYDUMPER_H
++#include <utils/String8.h>
++#include "IMemoryDumper.h"
++
++namespace android {
++
++class MemoryDumper: public BnMemoryDumper
++{
++public:
++    MemoryDumper(const char* destFile);
++    ~MemoryDumper();
++
++    virtual bool dumpHeap();
++    virtual bool saveMaps();
++
++    static void instantiate();
++
++private:
++    bool copyfile(const char* sourceFile, const char* destFile);
++
++    String8 m_fileName;
++    int m_dumpNo;
++};
++
++};
++#endif
+diff --git a/memorydumper/memorydumper.cpp b/memorydumper/memorydumper.cpp
+new file mode 100644
+index 0000000..b182e80
+--- /dev/null
++++ b/memorydumper/memorydumper.cpp
+@@ -0,0 +1,58 @@
++/*
++**
++** Copyright 2008, The Android Open Source Project
++**
++** Licensed under the Apache License, Version 2.0 (the "License");
++** you may not use this file except in compliance with the License.
++** You may obtain a copy of the License at
++**
++**     http://www.apache.org/licenses/LICENSE-2.0
++**
++** Unless required by applicable law or agreed to in writing, software
++** distributed under the License is distributed on an "AS IS" BASIS,
++** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++** See the License for the specific language governing permissions and
++** limitations under the License.
++*/
++
++// System headers required for setgroups, etc.
++
++#define LOG_NDEBUG 0
++#define LOG_TAG "My_MemoryDumper"
++#include <utils/Log.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <sys/types.h>
++
++#include <binder/IPCThreadState.h>
++#include <binder/ProcessState.h>
++
++#include <IMemoryDumper.h>
++#include <binder/IServiceManager.h>
++
++using namespace android;
++
++int main(int argc, char** argv)
++{
++    LOGI("entering main..."); 
++    sp<ProcessState> proc = ProcessState::self();
++    proc->startThreadPool();
++
++    sp<IServiceManager> sm = defaultServiceManager();
++    sp<IBinder> binder = sm->getService(String16("memory.dumper"));;
++    if (binder == 0)
++    {
++        LOGE("Get memory dumper failed!");
++        return -1;
++    }
++    sp<IMemoryDumper> memoryDumper = interface_cast<IMemoryDumper>(binder);
++    LOGI("dump the heap allocations");
++    bool issuccess = memoryDumper->dumpHeap();
++    LOGI("after dump the heap allocations, issuccess=%d", (int)issuccess);
++    memoryDumper.clear();
++
++    LOGI("Quiting...");
++    IPCThreadState::self()->stopProcess();
++    return 0;
++}
++
+-- 
+1.6.0.4
+
