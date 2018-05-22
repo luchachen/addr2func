@@ -12,7 +12,7 @@ REMAGIC = re.compile(r'(.*)(\d+\sbytes\s\(\s\d+\sbytes\s\*\s\d+\sallocations\s\)
 
 def PrintUsage():
     print
-    print "  usage: " + sys.argv[0] + " [options] <memory-diff> "
+    print "  usage: " + sys.argv[0] + " [options] new old"
     print
     print "  --root-dir=path"
     print "       the path to android source code root directory"
@@ -110,20 +110,41 @@ if __name__ == '__main__':
         libc_debug_exist = 1
     my_converter = AddressConverter(mapsfile, rootdir, product, libc_debug_exist)
     diffobj = open(arguments[0], 'r')
+    diffobj1 = open(arguments[1], 'r')
     allocations = diffobj.readlines()
     diffobj.close()
 
-    for onealloc in allocations:
-        print onealloc
-        #1 bytes ( 1 bytes * 1 allocations )
+    allocations1 = diffobj1.readlines()
+    diffobj1.close()
 
+    allocationslist = []
+    allocationslist1 = []
+    for onealloc in allocations:
         m = re.match(REMAGIC, onealloc)
         if m:
-            print m.group(2)
+            #print m.group(2)
             backtraces = map(string.strip, m.group(3).split(','))
+            allocationslist.append(backtraces)
+        else:
+            pass
+            #print onealloc 
+    for onealloc in allocations1:
+        m = re.match(REMAGIC, onealloc)
+        if m:
+            #print m.group(2)
+            backtraces = map(string.strip, m.group(3).split(','))
+            allocationslist1.append(backtraces)
+        else:
+            pass
+            #print onealloc 
+    for backtraces in allocationslist:
+        #print onealloc
+        #1 bytes ( 1 bytes * 1 allocations )
+
+        if backtraces in allocationslist1:
+            continue
+        else:
             print backtraces
             for address in backtraces:
                 function, lineinfile = my_converter.getfunction(int(address[2:], 16))
                 print '    ' + function +', ' + lineinfile
-        else:
-            print onealloc 
