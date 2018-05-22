@@ -6,6 +6,9 @@ import getopt
 import sys
 import os
 import string
+import re
+
+REMAGIC = re.compile(r'(.*)(\d+\sbytes\s\(\s\d+\sbytes\s\*\s\d+\sallocations\s\),)(.*)')
 
 def PrintUsage():
     print
@@ -31,7 +34,7 @@ class AddressConverter:
     def __init__(self, mapfilename, rootdir, product, debug=0):
         self.__readmaps(mapfilename)
         self.symbols_dir = rootdir + '/out/target/product/' + product + '/symbols/'
-        self.prebuilt_dir = rootdir + '/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8/bin/'
+        self.prebuilt_dir = rootdir + '/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin/'
         self.debug = debug
 
     def __readmaps(self, mapfilename):
@@ -111,9 +114,14 @@ if __name__ == '__main__':
     diffobj.close()
 
     for onealloc in allocations:
-        if onealloc.startswith('< size ') or onealloc.startswith('> size '):
-            backtraces = map(string.strip, onealloc[27:].split(','))
-            print onealloc[0:27]
+        print onealloc
+        #1 bytes ( 1 bytes * 1 allocations )
+
+        m = re.match(REMAGIC, onealloc)
+        if m:
+            print m.group(2)
+            backtraces = map(string.strip, m.group(3).split(','))
+            print backtraces
             for address in backtraces:
                 function, lineinfile = my_converter.getfunction(int(address[2:], 16))
                 print '    ' + function +', ' + lineinfile
